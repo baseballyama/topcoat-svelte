@@ -1,0 +1,12 @@
+[package]
+name = "counter-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+topcoat = { workspace = true }
+topcoat-svelte = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

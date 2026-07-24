@@ -1,0 +1,17 @@
+[package]
+name = "topcoat-svelte-macro"
+description = "The svelte! macro for topcoat-svelte: compiles a Svelte 5 component through rsvelte at build time."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+rsvelte_core = { workspace = true }
+sha2 = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

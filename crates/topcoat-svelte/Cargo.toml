@@ -1,0 +1,20 @@
+[package]
+name = "topcoat-svelte"
+description = "Use Svelte 5 components as client-rendered islands inside Topcoat apps, compiled by rsvelte."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+topcoat-svelte-macro = { workspace = true }
+topcoat = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+inventory = { workspace = true }
+
+[build-dependencies]
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -1,0 +1,69 @@
+//! Use [Svelte 5](https://svelte.dev) components as client-rendered **islands**
+//! inside [Topcoat](https://crates.io/crates/topcoat) apps.
+//!
+//! Components are compiled to JavaScript at Rust build time by
+//! [rsvelte](https://github.com/baseballyama/rsvelte), so an application needs
+//! only the Rust toolchain -- no Node.js and no bundler. The compiled modules
+//! and the vendored Svelte client runtime are served from memory by the app
+//! itself.
+//!
+//! # Overview
+//!
+//! Three pieces work together:
+//!
+//! - [`svelte!`] compiles a `.svelte` file and yields a [`SvelteComponent`].
+//! - [`SvelteComponent::island`] renders the component as an island node inside
+//!   [`view!`](topcoat::view::view), seeded with props from Rust.
+//! - [`script`] emits the import map and island loader (place it in `<head>`),
+//!   and the [`serve`] route serves the runtime and compiled modules.
+//!
+//! ```ignore
+//! use topcoat::prelude::*;
+//! use topcoat_svelte::{svelte, SvelteComponent};
+//!
+//! static COUNTER: SvelteComponent = svelte!("./Counter.svelte");
+//!
+//! #[page("/")]
+//! async fn index(cx: &Cx) -> Result {
+//!     view! {
+//!         <html>
+//!             <head>(topcoat_svelte::script())</head>
+//!             <body>(COUNTER.island(cx, &serde_json::json!({ "count": 3 })))</body>
+//!         </html>
+//!     }
+//! }
+//! ```
+//!
+//! Register [`serve`] on the router with `.route(topcoat_svelte::serve)`.
+//!
+//! # Phase 1 scope
+//!
+//! Islands render empty on the server and mount on the client; there is no SSR
+//! or hydration yet. See the crate's `docs/islands.md` guide and `DESIGN.md` for
+//! the roadmap.
+
+#![forbid(unsafe_code)]
+
+mod component;
+mod escape;
+mod registry;
+mod runtime;
+mod script;
+mod serve;
+
+pub use component::*;
+pub use registry::*;
+pub use script::*;
+pub use serve::*;
+
+pub use topcoat_svelte_macro::svelte;
+
+/// The URL namespace every `topcoat-svelte` asset is served under.
+pub(crate) const NAMESPACE: &str = "/_topcoat-svelte";
+
+/// Implementation details used by the [`svelte!`] macro's expansion. Not public
+/// API.
+#[doc(hidden)]
+pub mod __private {
+    pub use inventory;
+}

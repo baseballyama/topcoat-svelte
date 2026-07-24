@@ -1,0 +1,15 @@
+{
+  "name": "topcoat-svelte-runtime-build",
+  "private": true,
+  "type": "module",
+  "description": "Maintainer-only build that vendors the Svelte client runtime and island loader into crates/topcoat-svelte/runtime/dist. Application builds never run this; the dist output is committed.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "svelte": "5.56.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0"
+  }
+}
