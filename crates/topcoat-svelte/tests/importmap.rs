@@ -8,11 +8,14 @@ use topcoat_svelte::{SvelteComponent, compiled_modules, script, svelte};
 
 static RUNES: SvelteComponent = svelte!("./fixtures/counter.svelte");
 static LEGACY: SvelteComponent = svelte!("./fixtures/legacy.svelte");
+// A multi-file graph, so the coverage check also spans the specifiers emitted
+// by imported child and grandchild components.
+static GRAPH: SvelteComponent = svelte!("./fixtures/graph/Parent.svelte");
 
 #[tokio::test]
 async fn import_map_covers_every_bare_specifier() {
     // Reference the handles so their modules are linked and registered.
-    let _ = (RUNES.name(), LEGACY.name());
+    let _ = (RUNES.name(), LEGACY.name(), GRAPH.name());
 
     let cx = CxTestBuilder::new().build();
     let cx = &cx;

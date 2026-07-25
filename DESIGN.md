@@ -14,6 +14,9 @@ application developers need **only the Rust toolchain** — no Node.js, no npm.
   memory by the Topcoat app itself — no files written to disk, no bundler run by
   the app developer.
 - The Svelte islands coexist with Topcoat's own runtime (`topcoat::dev::script()`).
+- A component may `import` other `.svelte` files by **relative path**
+  (`./Child.svelte`, `../ui/Panel.svelte`). The whole reachable graph is compiled
+  and served; see "Module graph" below.
 
 ## Non-goals (Phase 1)
 
@@ -21,8 +24,6 @@ application developers need **only the Rust toolchain** — no Node.js, no npm.
   (Phase 2 will explore executing rsvelte's server output in an embedded JS engine.)
 - No typed props derived from the component's `<script>` (props are `impl Serialize`;
   typing may later come from rsvelte's svelte2tsx port).
-- No `.svelte` file imports from within `.svelte` files (single-file components only).
-  Component-imports-component requires a module graph; defer to Phase 2.
 - No Topcoat `topcoat asset` CLI integration; this crate has its own serving route.
 
 ## Why not `topcoat-asset`
@@ -197,10 +198,46 @@ router.route(topcoat_svelte::serve) // the /_topcoat-svelte/{file} route
    asserts HTML output. Manual browser verification happens after review.
 4. `cargo test --workspace` green, `cargo clippy --workspace` clean, `cargo fmt` clean.
 
+## Module graph
+
+A component's `<script>` may import other components by relative path
+(`import Child from './Child.svelte'`, also `../`). rsvelte preserves those
+imports in its compiled client output, so after compiling a component the macro:
+
+1. Parses the emitted JS with oxc and collects the string literals that are the
+   *source* of a static `import` / `export ... from` declaration and end in
+   `.svelte` with a relative (`./` or `../`) prefix. Parsing (rather than a text
+   search) means a `.svelte` substring inside ordinary code -- a variable value,
+   a text node -- is never mistaken for an import.
+2. Resolves each specifier against the **importing file's** directory, then
+   compiles that child the same way, depth-first. A child is compiled before the
+   parent that imports it. A file reached by several routes (a diamond) is
+   compiled once; a cycle is a compile error (its hash cannot be resolved, since
+   each module's hash would depend on the other's URL).
+3. Rewrites each specifier in the parent's JS to the child's served URL
+   (`/_topcoat-svelte/c/{Child}-{hash}.js`) and only *then* hashes the parent, so
+   the parent's hash folds in every child's hash: changing a grandchild changes
+   every ancestor's URL (transitive cache busting).
+4. Registers every module in the graph via `inventory::submit!` and emits an
+   `include_str!` for every file, so editing any file in the graph triggers a
+   recompile.
+
+Two different files that share a stem (`a/Button.svelte`, `b/Button.svelte`)
+used from one entry do not collide: their content differs, so their hashes and
+therefore their served filenames (`Button-<hashA>.js` vs `Button-<hashB>.js`)
+differ.
+
+**Limits.** Only relative `.svelte` specifiers are resolved. Bare/npm package
+imports (`import X from 'some-lib/Widget.svelte'`) remain unsupported -- there is
+no filesystem location to compile them from. Dynamic `import('./X.svelte')` is
+not rewritten -- rsvelte never emits it for child components, but user-written
+code in a `<script>` block may contain one; it fails at run time with a clean
+404 (the specifier resolves outside the registry), never with silent corruption.
+
 ## Open questions deliberately deferred to Phase 2
 
 - SSR + hydration (JS engine embedding: Boa vs rquickjs) — see topcoat repo discussion.
-- Multi-file components / module graph; `$app`-style stores; typed props.
+- `$app`-style stores; typed props.
 - Serving extracted CSS instead of `css: Injected`.
 - Topcoat CLI / dev-server niceties (watch `.svelte` files — `include_str!` already
   gives rebuild-on-change through cargo).

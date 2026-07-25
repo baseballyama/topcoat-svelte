@@ -95,8 +95,40 @@ the percent-encoded path browsers actually request, causing the component's
 module to 404. Editing the `.svelte` file triggers a rebuild. A Svelte compile
 error becomes a Rust `compile_error!` that points at the `svelte!` call.
 
-Phase 1 compiles single-file components only: a `.svelte` file cannot import
-another `.svelte` file.
+### Importing other components
+
+A component may import other `.svelte` files by relative path, and the whole
+reachable graph is compiled and served for you:
+
+```svelte
+<script>
+	import Label from './Label.svelte';
+	import Panel from '../ui/Panel.svelte';
+	let { count = 0 } = $props();
+</script>
+
+<Panel>
+	<Label text="clicks" /> {count}
+</Panel>
+```
+
+You only write `svelte!("./Counter.svelte")` for the entry component; every
+`.svelte` file it imports (and everything those import, transitively) is
+compiled, registered, and served under its own content-hashed URL. Imports are
+rewritten to those URLs, so a component's hash changes whenever any component it
+depends on changes -- caches never serve a stale child. Editing any file in the
+graph rebuilds the affected components.
+
+Limits:
+
+- Only **relative** specifiers ending in `.svelte` are resolved (`./Child.svelte`,
+  `../ui/Panel.svelte`). Bare or npm package imports
+  (`import X from 'some-lib/Widget.svelte'`) are not supported -- there is no
+  local file to compile.
+- Two files may share a name (`a/Button.svelte` and `b/Button.svelte`) in one
+  graph without colliding; their differing content gives them distinct URLs.
+- A cycle (`A.svelte` imports `B.svelte`, which imports `A.svelte`) is a
+  compile error.
 
 ## `island`
 

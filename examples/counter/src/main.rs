@@ -68,5 +68,19 @@ mod tests {
         // The runtime is wired up: import map first, then the loader.
         assert!(html.contains("type=\"importmap\""));
         assert!(html.contains("/_topcoat-svelte/loader.js?v="));
+
+        // `Counter.svelte` imports `Label.svelte`, so both are compiled and
+        // registered, and the counter module references the label by URL.
+        let names: Vec<&str> = topcoat_svelte::compiled_modules()
+            .map(|m| m.name())
+            .collect();
+        assert!(names.contains(&"Counter"));
+        assert!(names.contains(&"Label"));
+
+        let counter = topcoat_svelte::compiled_modules()
+            .find(|m| m.name() == "Counter")
+            .unwrap();
+        assert!(counter.js().contains("/_topcoat-svelte/c/Label-"));
+        assert!(!counter.js().contains("'./Label.svelte'"));
     }
 }

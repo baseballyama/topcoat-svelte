@@ -117,3 +117,79 @@ singleton across `mount`, the component namespace, and the flags. `pnpm` pins
   keeping the referenced `static`'s initializer. In normal use the `SvelteComponent`
   is referenced by `island(...)`, so it is kept. This was validated with a
   standalone experiment before adopting it.
+
+## Module graph (`.svelte` importing `.svelte`)
+
+A component may import other components by relative path. The `svelte!` macro
+compiles the entire reachable graph, not just the entry file. This lifts the
+Phase 1 "single-file components only" non-goal.
+
+### How specifier rewriting works, and why it is safe
+
+rsvelte preserves user imports verbatim in its client output (e.g.
+`import Child from './Child.svelte';`). The macro must turn that specifier into a
+served URL without touching a look-alike string literal such as
+`let note = "loaded from ./fake.svelte";`.
+
+Rewriting is therefore **AST-based, not textual** (`rewrite.rs`):
+
+1. The compiled JS is parsed with `oxc_parser` (pinned to the same `0.139` line
+   `rsvelte_core` already builds against, so it adds no new version to the tree).
+2. Only the top-level `Statement::ImportDeclaration`,
+   `Statement::ExportAllDeclaration`, and `Statement::ExportNamedDeclaration`
+   (when it has a `source`) are inspected. The specifier considered is the
+   declaration's `source` string literal -- never an arbitrary string elsewhere
+   in the program. A `.svelte` substring in a variable value or a text node is
+   in a different AST node and is structurally unreachable from this walk, so it
+   is impossible to rewrite by accident. This is covered by
+   `rewrite::tests::ignores_svelte_substring_in_string_literals`,
+   `rewrite::tests::rewrites_only_the_import_specifier_not_a_lookalike_literal`,
+   and the integration test
+   `graph::child_specifiers_are_rewritten_and_lookalike_literals_are_not`.
+3. Only relative (`./`, `../`) specifiers ending in `.svelte` are collected;
+   bare specifiers (`svelte/internal/client`) and non-`.svelte` relative imports
+   are left for the import map / browser.
+4. Each replacement uses the string literal's byte span (`source.span`, which
+   spans the quotes), and edits are applied back-to-front so earlier offsets stay
+   valid. Served URLs contain only URL-safe characters, so re-quoting them with
+   single quotes needs no escaping.
+
+If oxc cannot parse the compiled JS at all (`ParserReturn::panicked`), the macro
+emits a clear compile error rather than silently missing an import. In practice
+rsvelte output parses with zero diagnostics.
+
+### Recursion, ordering, dedup, and cycles (`graph.rs`)
+
+- The graph is built depth-first. A **child is compiled before its parent**, so
+  the parent's content hash is computed *after* its child specifiers are
+  rewritten to `/_topcoat-svelte/c/{Child}-{hash}.js`. This makes cache busting
+  transitive: a change anywhere in the graph changes every ancestor's hash.
+- **Dedup is by canonicalized path** (which implies identical content), stronger
+  than the "dedupe by content" the brief suggested: a diamond import compiles the
+  shared module once. Across separate `svelte!` calls the same child may be
+  submitted twice with the same `{name}-{hash}.js` filename; the registry's
+  `HashMap` keying already collapses that, so it is harmless.
+- **Cycles are a compile error.** A cycle has no valid hashing order (each
+  module's hash would depend on the other's URL, which depends on its hash). The
+  DFS stack detects re-entry and reports the chain
+  (`cyclic \`.svelte\` imports are not supported: A -> B -> A`). Tested by
+  `graph::tests::detects_import_cycles`.
+- **Same-stem, different-file** components do not collide: differing content
+  yields different hashes, hence different served filenames. Tested by
+  `graph::same_stem_different_files_do_not_collide`.
+
+### URL construction coupling
+
+The child URL baked into a parent's JS is built in the macro from the literal
+prefix `/_topcoat-svelte/c/` (`graph::MODULE_URL_PREFIX`). The macro cannot
+depend on the `topcoat-svelte` crate (that would be circular), so it cannot read
+the crate's `NAMESPACE`. The runtime-side test
+`component::tests::serve_url_matches_macro` pins `SvelteComponent::module_url` to
+exactly this shape, so the two definitions cannot drift apart unnoticed.
+
+### Macro crate structure
+
+The `svelte!` macro grew from one `lib.rs` into `lib.rs` (the proc-macro entry
+and token generation), `resolve.rs` (path resolution, naming, hashing),
+`rewrite.rs` (the oxc-based specifier extraction/rewriting), and `graph.rs` (the
+recursive graph builder), following the repo's file-per-module style.

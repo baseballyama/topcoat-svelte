@@ -34,3 +34,10 @@ tokio = "1"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
+# oxc parses the rsvelte-compiled client JS so the `svelte!` macro can rewrite
+# only genuine `.svelte` import specifiers (never look-alike string literals).
+# Pinned to the same 0.139 line rsvelte_core already builds against.
+oxc_allocator = "0.139"
+oxc_ast = "0.139"
+oxc_parser = "0.139"
+oxc_span = "0.139"

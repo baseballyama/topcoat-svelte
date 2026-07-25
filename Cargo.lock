@@ -3331,6 +3331,10 @@ dependencies = [
 name = "topcoat-svelte-macro"
 version = "0.1.0"
 dependencies = [
+ "oxc_allocator 0.139.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxc_ast 0.139.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxc_parser 0.139.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oxc_span 0.139.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "proc-macro2",
  "quote",
  "rsvelte_core",

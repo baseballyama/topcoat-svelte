@@ -114,6 +114,19 @@ mod tests {
     use crate::SvelteComponent;
 
     #[test]
+    fn serve_url_matches_macro() {
+        // The `svelte!` macro bakes child module URLs into the compiled JS using
+        // the literal prefix `/_topcoat-svelte/c/` (see the macro's `graph`
+        // module). `module_url` must produce exactly that shape, or a rewritten
+        // child import would 404.
+        static COMPONENT: SvelteComponent = SvelteComponent::new("Child", "0011223344556677");
+        assert_eq!(
+            COMPONENT.module_url(),
+            "/_topcoat-svelte/c/Child-0011223344556677.js"
+        );
+    }
+
+    #[test]
     fn island_html_has_marker_module_and_props() {
         let cx = CxTestBuilder::new().build();
         static COMPONENT: SvelteComponent = SvelteComponent::new("Counter", "0123456789abcdef");
