@@ -1,10 +1,21 @@
 //! The [`SvelteComponent`] handle and the [`Island`] it renders.
 
+use http::request::Parts;
 use serde::Serialize;
-use topcoat::context::Cx;
+use topcoat::context::{Cx, try_request_context};
+use topcoat::router::{HeaderMap, HeaderValue, header};
 use topcoat::view::{NodeViewParts, PartsWriter, View};
 
 use crate::escape::to_script_json;
+
+/// The request/response header the client router uses to ask a page route for
+/// its JSON data instead of the HTML document (see the crate's `docs/pages.md`
+/// client-navigation section). Sent by the loader, read here from the request,
+/// and echoed in every page response's `Vary`.
+const DATA_HEADER: &str = "X-Topcoat-Svelte";
+
+/// The value [`DATA_HEADER`] carries on a data request.
+const DATA_HEADER_VALUE: &str = "data";
 
 /// A handle to a Svelte component compiled by the [`svelte!`](crate::svelte)
 /// macro.
@@ -71,7 +82,7 @@ impl SvelteComponent {
         let (ssr_attr, server_html) = self.server_render_island(&module_url, &props_json);
         let html = format!(
             "{comment}{}",
-            hydration_root(&module_url, ssr_attr, &server_html, &props_json)
+            hydration_root(&module_url, ssr_attr, "", &server_html, &props_json)
         );
         Island { html }
     }
@@ -96,16 +107,35 @@ impl SvelteComponent {
     /// compatibility; it is currently unused at construction.
     #[must_use]
     pub fn page(&self, cx: &Cx, props: &impl Serialize) -> Page {
-        let _ = cx;
         let module_url = self.module_url();
         let (props_json, comment) = self.props_json(props);
-        let (ssr_attr, head, body) = self.server_render_page(&module_url, &props_json);
+        // A `X-Topcoat-Svelte: data` request (the client router asking for the
+        // next page) gets JSON, not an HTML document. The client mounts fresh on
+        // navigation -- hydration is only for the initial document -- so there is
+        // nothing to server-render here; skip SSR entirely.
+        let body = if is_data_request(cx) {
+            PageBody::Data
+        } else {
+            let (ssr_attr, svelte_head, server_body) =
+                self.server_render_page(&module_url, &props_json);
+            PageBody::Document {
+                comment,
+                script: crate::script::markup(),
+                svelte_head,
+                root: hydration_root(
+                    &module_url,
+                    ssr_attr,
+                    PAGE_ROOT_ATTR,
+                    &server_body,
+                    &props_json,
+                ),
+            }
+        };
         Page {
-            comment,
-            script: crate::script::markup(),
-            svelte_head: head,
+            module_url,
+            props_json,
             extra_head: None,
-            root: hydration_root(&module_url, ssr_attr, &body, &props_json),
+            body,
         }
     }
 
@@ -194,13 +224,25 @@ impl SvelteComponent {
 /// URL, the (possibly empty) server HTML, and the props script. Keeping both
 /// paths on this one template is what lets the client loader hydrate a page with
 /// zero page-specific code.
-fn hydration_root(module_url: &str, ssr_attr: &str, server_html: &str, props_json: &str) -> String {
+fn hydration_root(
+    module_url: &str,
+    ssr_attr: &str,
+    page_attr: &str,
+    server_html: &str,
+    props_json: &str,
+) -> String {
     format!(
-        "<div data-tcs-island{ssr_attr} data-tcs-module=\"{module_url}\" \
+        "<div data-tcs-island{ssr_attr}{page_attr} data-tcs-module=\"{module_url}\" \
          style=\"display:contents\">{server_html}\
          <script type=\"application/json\">{props_json}</script></div>"
     )
 }
+
+/// The marker attribute (with a leading space) that distinguishes a page's
+/// hydration root from a plain island. The client router activates only when a
+/// `data-tcs-page` root is present and swaps that element on navigation; islands
+/// never carry it.
+const PAGE_ROOT_ATTR: &str = " data-tcs-page";
 
 /// A client-rendered Svelte island, produced by
 /// [`SvelteComponent::island`]. Usable in node position inside
@@ -217,21 +259,45 @@ impl NodeViewParts for Island {
     }
 }
 
-/// A full HTML document rendered from a single Svelte component tree, produced
-/// by [`SvelteComponent::page`]. Usable in node position inside
+/// A page produced by [`SvelteComponent::page`]. Usable in node position inside
 /// [`view!`](topcoat::view::view) -- typically as the whole body of a `#[page]`
 /// function.
+///
+/// It answers a normal request with a full HTML document and a
+/// `X-Topcoat-Svelte: data` request (the client router asking for the next page)
+/// with the JSON `{ "module": <url>, "props": <props> }`, deciding which at
+/// render time from the request `Cx`. Either way it declares
+/// `Vary: X-Topcoat-Svelte` so caches keep the two apart.
 pub struct Page {
-    /// An HTML comment explaining a props-serialization failure, or empty.
-    comment: String,
-    /// The import map + loader markup from [`crate::script::markup`].
-    script: String,
-    /// The component's `<svelte:head>` content (empty without server rendering).
-    svelte_head: String,
-    /// Optional Rust-supplied head content, added via [`Page::with_head`].
+    /// The compiled module's served URL, sent in the data response.
+    module_url: String,
+    /// The XSS-safe props JSON, embedded in the document and reused verbatim as
+    /// the data response's `props` (its `\uXXXX` escapes are valid JSON, so the
+    /// value stays identical to the initial-load props).
+    props_json: String,
+    /// Optional Rust-supplied head content, added via [`Page::with_head`]
+    /// (document responses only).
     extra_head: Option<View>,
-    /// The island-shaped hydration root that spans the document body.
-    root: String,
+    /// The response body: the HTML document, or the JSON data reply.
+    body: PageBody,
+}
+
+/// What a [`Page`] renders, chosen at construction from the request.
+enum PageBody {
+    /// A full HTML document (a normal request).
+    Document {
+        /// An HTML comment explaining a props-serialization failure, or empty.
+        comment: String,
+        /// The import map + loader markup from [`crate::script::markup`].
+        script: String,
+        /// The component's `<svelte:head>` content (empty without server
+        /// rendering).
+        svelte_head: String,
+        /// The island-shaped hydration root that spans the document body.
+        root: String,
+    },
+    /// The JSON data reply (a `X-Topcoat-Svelte: data` request).
+    Data,
 }
 
 impl Page {
@@ -261,22 +327,81 @@ impl Page {
 
 impl NodeViewParts for Page {
     fn into_view_parts(self, cx: &Cx, parts: &mut PartsWriter<'_>) {
-        // Every string here is either a fixed template, hash-only URLs, server
-        // HTML that already went through the SSR path, or props escaped by
-        // `to_script_json`, so emitting them unescaped is safe. Only the
-        // Rust-supplied `extra_head` goes through the normal (escaping) view
-        // path, exactly as if written inline in `view!`.
-        parts.push_str_unescaped(self.comment);
-        parts.push_str_unescaped("<!doctype html><html><head>");
-        parts.push_str_unescaped(self.script);
-        parts.push_str_unescaped(self.svelte_head);
-        if let Some(head) = self.extra_head {
-            head.into_view_parts(cx, parts);
+        let Page {
+            module_url,
+            props_json,
+            extra_head,
+            body,
+        } = self;
+        match body {
+            PageBody::Data => {
+                // `{ "module": <url>, "props": <props> }`. The URL is quoted
+                // through serde for safe JSON; `props_json` is spliced in
+                // verbatim so the client parses the exact same props value it
+                // would have on an initial load. `Content-Type: application/json`
+                // (replacing the view's `text/html` default) and
+                // `Vary: X-Topcoat-Svelte` are declared as response headers.
+                data_response_headers().into_view_parts(cx, parts);
+                let module =
+                    serde_json::to_string(&module_url).unwrap_or_else(|_| "\"\"".to_owned());
+                parts.push_str_unescaped(format!("{{\"module\":{module},\"props\":{props_json}}}"));
+            }
+            PageBody::Document {
+                comment,
+                script,
+                svelte_head,
+                root,
+            } => {
+                // Every string here is a fixed template, hash-only URLs, server
+                // HTML that already went through the SSR path, or props escaped
+                // by `to_script_json`, so emitting them unescaped is safe. Only
+                // the Rust-supplied `extra_head` goes through the normal
+                // (escaping) view path, exactly as if written inline in `view!`.
+                document_response_headers().into_view_parts(cx, parts);
+                parts.push_str_unescaped(comment);
+                parts.push_str_unescaped("<!doctype html><html><head>");
+                parts.push_str_unescaped(script);
+                parts.push_str_unescaped(svelte_head);
+                if let Some(head) = extra_head {
+                    head.into_view_parts(cx, parts);
+                }
+                parts.push_str_unescaped("</head><body>");
+                parts.push_str_unescaped(root);
+                parts.push_str_unescaped("</body></html>");
+            }
         }
-        parts.push_str_unescaped("</head><body>");
-        parts.push_str_unescaped(self.root);
-        parts.push_str_unescaped("</body></html>");
     }
+}
+
+/// Whether the current request asked for a page's JSON data (the client router's
+/// `X-Topcoat-Svelte: data` request) rather than the HTML document. A `Page`
+/// rendered outside a request (no `Parts` in the context) is treated as a normal
+/// document request rather than panicking.
+fn is_data_request(cx: &Cx) -> bool {
+    try_request_context::<Parts>(cx)
+        .and_then(|parts| parts.headers.get(DATA_HEADER))
+        .and_then(|value| value.to_str().ok())
+        == Some(DATA_HEADER_VALUE)
+}
+
+/// Headers for the JSON data reply: JSON content type (replacing the view's
+/// `text/html` default) and `Vary` on the data header.
+fn data_response_headers() -> HeaderMap {
+    let mut map = HeaderMap::with_capacity(2);
+    map.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    map.insert(header::VARY, HeaderValue::from_static(DATA_HEADER));
+    map
+}
+
+/// Headers for the HTML document reply: `Vary` on the data header so a cache
+/// never serves an HTML document to a data request (or vice versa).
+fn document_response_headers() -> HeaderMap {
+    let mut map = HeaderMap::with_capacity(1);
+    map.insert(header::VARY, HeaderValue::from_static(DATA_HEADER));
+    map
 }
 
 /// Neutralizes `-->` so a serialization error message cannot close the HTML
@@ -387,7 +512,8 @@ mod tests {
         // Empty client-mounted root spanning the body.
         assert!(!html.contains("data-tcs-ssr"), "{html}");
         assert!(html.contains(
-            "<div data-tcs-island data-tcs-module=\"/_topcoat-svelte/c/Doc-0123456789abcdef.js\" \
+            "<div data-tcs-island data-tcs-page \
+             data-tcs-module=\"/_topcoat-svelte/c/Doc-0123456789abcdef.js\" \
              style=\"display:contents\">\
              <script type=\"application/json\">{\"count\":3}</script></div>"
         ));

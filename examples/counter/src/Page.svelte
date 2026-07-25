@@ -13,6 +13,12 @@
 	<p>This whole document is a single Svelte component tree, rendered by Rust.</p>
 	<p><Label text="Live counter:" /> the button below is the same component reused.</p>
 	<Counter {count} />
+	<nav>
+		<!-- Soft navigation between the two Svelte pages (no full reload). -->
+		<a href="/about">About page</a>
+		<!-- The island page is not a Svelte page, so this full-navigates. -->
+		<a href="/">Island demo</a>
+	</nav>
 </main>
 
 <style>

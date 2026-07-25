@@ -35,10 +35,14 @@ async fn page_document_is_server_rendered_with_head() {
     assert!(html.contains("data-tcs-ssr"));
     assert!(html.contains("<h1>Hello Rust</h1>"), "{html}");
     assert!(html.contains("count 4"), "{html}");
-    // serde_json serializes object keys in sorted order.
-    assert!(html.contains(
-        "<script type=\"application/json\">{\"count\":4,\"title\":\"Hello Rust\"}</script>"
-    ));
+    // The embedded props parse back to the value passed in (object key order is
+    // an unstable detail of serde_json feature unification, so parse rather than
+    // string-match).
+    let marker = "<script type=\"application/json\">";
+    let start = html.find(marker).unwrap() + marker.len();
+    let end = html[start..].find("</script>").unwrap() + start;
+    let embedded: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();
+    assert_eq!(embedded, props);
     assert!(html.trim_end().ends_with("</body></html>"), "{html}");
 }
 

@@ -132,6 +132,70 @@ Pages need no new layout machinery, and the two layout styles compose:
   Layouts that render a document shell belong with `view!` pages and islands,
   where the shell is yours to write.
 
+## Client-side navigation (Inertia-style)
+
+Once a document is a Svelte page, the loader turns same-origin link clicks into
+**soft navigations**: no full reload, just a swap of the page component. This is
+the [Inertia.js](https://inertiajs.com) model -- server-driven routing with a
+client-side component swap -- not a ported SvelteKit router. It is automatic;
+there is no client API to call.
+
+### The data protocol
+
+`page` answers a request in one of two ways, decided from the request headers:
+
+- a normal request gets the HTML document (as above);
+- a request carrying `X-Topcoat-Svelte: data` gets JSON instead:
+  `{"module": "/_topcoat-svelte/c/<Name>-<hash>.js", "props": <the props value>}`,
+  with `Content-Type: application/json`.
+
+The **same `#[page]` function** serves both -- it *is* the `load()`; the `Page`
+node inspects the request and shapes the response. Both replies carry
+`Vary: X-Topcoat-Svelte` so a cache never hands an HTML document to a data
+request or the reverse. The `props` in the JSON is byte-for-byte the same string
+embedded in the initial document, so the value the client mounts with on
+navigation is identical to the one it would hydrate with on a fresh load.
+
+### What the loader does
+
+- **Intercepts** clicks on same-origin `<a>` elements -- unless the click has a
+  modifier key, or the link has `target`, `download`, `data-tcs-reload`, or is a
+  pure-hash link on the current page.
+- **Fetches** the target with `X-Topcoat-Svelte: data`, expecting JSON. Anything
+  else -- a network error, a non-page route, a redirect to another content type
+  -- **falls back to a full navigation** (`location.assign`). Without JavaScript
+  the links are ordinary links, so navigation degrades cleanly. If you already
+  know a link points at a non-page route (a download, an external redirect,
+  etc.), mark it `data-tcs-reload` to skip this probe fetch and navigate
+  directly.
+- **Swaps** the page: dynamically imports the new module, unmounts the current
+  page component, and mounts the new one into the same hydration root with the
+  new props (a client render -- hydration is only for the first document). Then
+  it `pushState`s the URL, scrolls to the top (or to a `#fragment` target), and
+  Svelte applies the new `<svelte:head>` (title etc.).
+- **Back/forward** (`popstate`) re-fetches and swaps for the restored URL.
+- **Prefetches** on `pointerover`/`focus`: the data fetch and module import run
+  ahead of the click, cached per URL for the document's lifetime. Prefetch
+  failures are silent; the click path retries or falls back.
+
+Opt a single link out of interception with `data-tcs-reload` (it will do a full
+navigation):
+
+```html
+<a href="/report.pdf" data-tcs-reload>Download</a>
+```
+
+The router only activates when the document has a page hydration root
+(`data-tcs-page`); island-only documents get no interception.
+
+### State semantics (v1)
+
+The **whole** page component tree is swapped on navigation. Svelte-side layout
+component state does **not** survive a navigation yet (SvelteKit preserves layout
+instances across route changes; this does not). Islands mounted outside the page
+root are untouched by navigation. These limits are expected to lift in a later
+stage.
+
 ## Islands vs. pages
 
 | | Island | Page |

@@ -10,6 +10,11 @@ developer needs only the Rust toolchain (no Node.js).
   (`component.island(cx, &props)`).
 - **Pages** — render a whole HTML document from one Svelte component tree, with
   the `#[page]` function as SvelteKit's `load()` (`component.page(cx, &props)`).
+- **Client navigation** — same-origin links between Svelte pages soft-navigate
+  (Inertia-style: the `#[page]` fn answers a `X-Topcoat-Svelte: data` request
+  with JSON and the client swaps the page component), with hover prefetch and a
+  full-reload fallback. Progressive enhancement: without JS every link still
+  works.
 - **Module graph** — a component may `import` other `.svelte` files by relative
   path; the whole reachable graph is compiled and served.
 - **SSR + hydration** — opt in with the `ssr` feature to server-render islands

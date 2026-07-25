@@ -358,3 +358,91 @@ the component's `<svelte:head>`), keeping `page()` unopinionated. `page()` takes
 `cx` for symmetry with `island()` but does not use it at construction (props
 serialize eagerly, SSR runs on the current thread's engine); it is retained for
 API stability, matching the island precedent.
+
+## Stage 4: client-side navigation (Inertia-style)
+
+Implements the `DESIGN.md` "Stage 4: client-side navigation (Inertia-style)"
+contract: same-origin links between Svelte pages soft-navigate. The `#[page]` fn
+is unchanged for both request kinds -- it is the `load()`; the `Page` node shapes
+the response from the request.
+
+### Content-type switch works; no design-stopping deviation
+
+The contract flagged node-position response shaping as a design-stopping risk if
+topcoat 0.4 could not do it. It can. `HeaderMap` (and `(HeaderName, HeaderValue)`)
+implement `NodeViewParts` in node position (they record a headers view part that
+emits no body), and `IntoResponse for View` applies declared headers over the
+`Html` default such that a declared `Content-Type` **replaces** `text/html`
+(topcoat's own `view_declared_content_type_replaces_the_html_default` test pins
+this). So `Page::into_view_parts`:
+
+- reads the request via `try_request_context::<http::request::Parts>(cx)` (the
+  `try_` form so a page rendered outside a request degrades to HTML instead of
+  panicking) and checks `X-Topcoat-Svelte: data`;
+- on a data request, declares `Content-Type: application/json` +
+  `Vary: X-Topcoat-Svelte` and writes the JSON body
+  `{"module": <url>, "props": <props>}`; SSR is skipped entirely (the client
+  mounts on navigation -- hydration is only for the first document);
+- on a normal request, declares `Vary: X-Topcoat-Svelte` and writes the HTML
+  document as before.
+
+`http` moved from a dev-dependency to a normal dependency (for
+`http::request::Parts`); it was already in the tree through `topcoat`.
+
+### Props identity
+
+The data JSON splices in the *exact* `props_json` string already embedded in the
+document (`{"module":<serde-quoted url>,"props":<props_json>}`). The escape
+path's `\uXXXX` escapes are valid JSON, so `JSON.parse` yields the identical
+value on both the initial load and a navigation.
+
+### Page root marker; loader is the client router
+
+Islands and pages share `hydration_root`, now taking a `page_attr`: islands pass
+`""`, pages pass `" data-tcs-page"`. The loader (vendored `runtime/loader.js`)
+gained the client router, active only when a `[data-tcs-page]` root exists:
+
+- intercepts same-origin left-clicks (skipping modifier keys, `target`,
+  `download`, `data-tcs-reload`, and pure-hash links);
+- `fetch`es the URL with `X-Topcoat-Svelte: data`, expecting JSON; any deviation
+  (non-JSON, non-OK, network error) falls back to `location.assign`;
+- unmounts the current page component and mounts the new one into the same root
+  with the fetched props (bookkeeping the mounted instance in `currentPage`;
+  `svelte.js` already re-exported `unmount` from Stage 2, so no dist entry
+  change was needed);
+- `pushState` + scroll (top or `#fragment`); `popstate` re-fetches and swaps;
+- prefetches on `pointerover`/`focusin`, cached per URL for the document
+  lifetime, failures silent.
+
+A per-document `window.__topcoatSvelte = { navigations }` marker lets an E2E test
+prove a navigation happened without a full reload (a reload resets it to 0).
+
+### dist diff
+
+Re-running `runtime/build.mjs` changed **only** `dist/loader.js` (3.0kb). The
+Svelte runtime entries were untouched, so esbuild reproduced every other
+`runtime/*.js` / `runtime/server/*.js` byte-for-byte; `RUNTIME_HASH` changes
+because it hashes the loader too.
+
+### Testing
+
+- Rust (`tests/navigation.rs`, both feature modes): a data-header request yields
+  the JSON contract with `Content-Type: application/json` + `Vary`; a normal
+  request yields the HTML document with `Vary` and the `data-tcs-page` marker;
+  props parsed (not string-matched) for identity. The example
+  (`page_route_answers_the_data_protocol`) drives the real `#[page]` fn the same
+  way. Browser E2E is a manual/review-time step (see the reviewer notes in the
+  final report).
+- JSON assertions **parse** rather than string-match object key order:
+  `serde_json/preserve_order` is enabled transitively in this workspace (via
+  `topcoat-router`'s hyper stack pulling `indexmap`), so object key order is
+  insertion order and not a stable contract. The Stage 3 `tests/page.rs`
+  props-string assertion was updated to parse for the same reason.
+
+### Deviations from the Stage 4 contract
+
+None material. Two v1 limits are as the contract states (documented in
+`docs/pages.md`): Svelte-side layout component state does not survive a
+navigation (whole tree is swapped), and a link to a non-page route (e.g. the
+island page `/`) soft-attempts first, then falls back to a full navigation after
+one data fetch returns HTML -- correct, at the cost of one extra request.

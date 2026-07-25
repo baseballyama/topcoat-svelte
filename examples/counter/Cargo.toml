@@ -16,3 +16,7 @@ topcoat = { workspace = true }
 topcoat-svelte = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+# Building a request with the `X-Topcoat-Svelte` header to test the data protocol.
+http = { workspace = true }

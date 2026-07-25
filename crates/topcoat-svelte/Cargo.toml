@@ -18,6 +18,10 @@ topcoat = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 inventory = { workspace = true }
+# Reading the `X-Topcoat-Svelte` request header (via `http::request::Parts`) so a
+# page answers the client router's data request; also builds request `Parts` in
+# tests. Already in the tree through `topcoat`.
+http = { workspace = true }
 rquickjs = { workspace = true, features = ["loader"], optional = true }
 
 [build-dependencies]
@@ -25,5 +29,3 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
-# Building request `Parts` to drive the `serve` route in tests.
-http = { workspace = true }

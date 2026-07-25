@@ -1,7 +1,8 @@
 //! A minimal Topcoat app showing two ways to use Svelte 5 from Rust: a counter
-//! embedded as a client-side island inside a `view!` page (`/`), and a whole
-//! document rendered from a single Svelte component tree (`/page`). Both seed
-//! their props from Rust.
+//! embedded as a client-side island inside a `view!` page (`/`), and whole
+//! documents rendered from a single Svelte component tree (`/page`, `/about`).
+//! The two Svelte pages soft-navigate between each other (Inertia-style client
+//! routing); links to the island page full-navigate. All seed props from Rust.
 
 use topcoat::{
     Result,
@@ -13,6 +14,7 @@ use topcoat_svelte::{SvelteComponent, svelte};
 
 static COUNTER: SvelteComponent = svelte!("./Counter.svelte");
 static PAGE: SvelteComponent = svelte!("./Page.svelte");
+static ABOUT: SvelteComponent = svelte!("./About.svelte");
 
 async fn render_index(cx: &Cx) -> Result {
     view! { cx =>
@@ -48,6 +50,17 @@ async fn render_page(cx: &Cx) -> Result {
 #[page("/page")]
 async fn page_route(cx: &Cx) -> Result {
     render_page(cx).await
+}
+
+/// Renders `/about`, the second Svelte page. The client router soft-navigates
+/// between `/page` and `/about`.
+async fn render_about(cx: &Cx) -> Result {
+    view! { cx => (ABOUT.page(cx, &serde_json::json!({ "message": "a second Svelte page" }))) }
+}
+
+#[page("/about")]
+async fn about_route(cx: &Cx) -> Result {
+    render_about(cx).await
 }
 
 /// Builds the router: the app's pages plus the `topcoat-svelte` asset route.
@@ -121,6 +134,10 @@ mod tests {
         assert!(html.contains("data-tcs-module=\"/_topcoat-svelte/c/Page-"));
         assert!(html.contains("<script type=\"application/json\">{\"count\":5}</script>"));
 
+        // The page's hydration root carries the `data-tcs-page` marker that
+        // activates the client router (present regardless of rendering mode).
+        assert!(html.contains("data-tcs-page"));
+
         // The page composes the reused Counter and Label components.
         let names: Vec<&str> = topcoat_svelte::compiled_modules()
             .map(|m| m.name())
@@ -145,6 +162,51 @@ mod tests {
                 "server markup missing: {html}"
             );
             assert!(html.contains("clicked"), "nested counter missing: {html}");
+            // The nav links (rendered by the component) are present server-side.
+            assert!(html.contains("href=\"/about\""), "nav link missing: {html}");
+            assert!(html.contains("href=\"/\""), "nav link missing: {html}");
         }
+    }
+
+    /// A `X-Topcoat-Svelte: data` request to a page route gets the JSON data
+    /// contract (module URL + props) instead of the HTML document, so the client
+    /// router can swap pages without a full reload.
+    #[tokio::test]
+    async fn page_route_answers_the_data_protocol() {
+        let parts = http::Request::builder()
+            .method("GET")
+            .uri("/about")
+            .header("X-Topcoat-Svelte", "data")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        let cx = CxTestBuilder::new().request_context(parts).build();
+        let cx = &cx;
+        let rendered = render_about(cx).await.unwrap().render_response(cx);
+
+        assert!(
+            rendered
+                .html
+                .starts_with("{\"module\":\"/_topcoat-svelte/c/About-"),
+            "{}",
+            rendered.html
+        );
+        assert!(
+            rendered
+                .html
+                .contains("\"props\":{\"message\":\"a second Svelte page\"}"),
+            "{}",
+            rendered.html
+        );
+        assert!(!rendered.html.contains("<!doctype html>"));
+        assert_eq!(
+            rendered.headers.get(http::header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            rendered.headers.get(http::header::VARY).unwrap(),
+            "X-Topcoat-Svelte"
+        );
     }
 }
