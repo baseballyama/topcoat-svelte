@@ -270,6 +270,40 @@ Spike evidence: `docs/phase2-ssr-spike.md`. Pinned contract:
   can flash unstyled until hydration; extracted-CSS serving remains the fix and
   stays deferred.
 
+## Stage 3: Svelte pages
+
+The whole page is one Svelte component tree; the `#[page]` Rust fn plays
+SvelteKit's `load()`. Pinned contract:
+
+- **API.** `SvelteComponent::page(cx, &props) -> …` renders a **full HTML
+  document**: `<!doctype html><html><head>` containing `script()`'s output
+  (importmap + loader) plus the component's `<svelte:head>` content, then a
+  `<body>` whose sole child is the hydration root. An optional builder-style
+  hook lets Rust add extra head content (e.g.
+  `.page_with_head(cx, &props, head_view)` or equivalent — implementer's
+  choice, but Rust-supplied head must compose with `<svelte:head>` output).
+- **Hydration root.** Same shape as an island (`data-tcs-island` +
+  `data-tcs-module` + embedded props JSON + `data-tcs-ssr` when
+  server-rendered) so the existing loader hydrates pages with zero new
+  client code, with one addition: the root div of a page spans the body.
+- **Head extraction.** The engine harness returns Svelte's
+  `render()` result as `{ head, body }` (JSON) instead of body-only; the
+  `SsrEngine` trait's render output becomes a small struct. `<svelte:head>`
+  content lands in the document head on the server; on CSR-only builds it is
+  applied by Svelte at mount as usual.
+- **Feature interplay.** `page()` works with and without the `ssr` feature:
+  with it, the document arrives server-rendered and hydrates; without it, the
+  body root is empty and mounts on the client (SPA-style degradation, same
+  props path). No hard dependency on `ssr`.
+- **Layouts.** No new machinery: Svelte-side layouts are plain component
+  composition (`{@render children()}` via the module graph); Rust-side
+  `#[layout]`s keep working because a page's View is still a View — the
+  hydration root just sits inside whatever shell the layout renders.
+  Both styles are documented.
+- **Escaping.** Server-rendered head/body strings enter the View through the
+  unescaped path exactly like island SSR HTML; props keep the Phase 1
+  escaping contract.
+
 ## Open questions deliberately deferred to Phase 2
 
 - SSR + hydration (JS engine embedding: Boa vs rquickjs) — see topcoat repo discussion.
