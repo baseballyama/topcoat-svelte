@@ -304,6 +304,50 @@ SvelteKit's `load()`. Pinned contract:
   unescaped path exactly like island SSR HTML; props keep the Phase 1
   escaping contract.
 
+## Stage 4: client-side navigation (Inertia-style)
+
+Server-driven routing with client-side page-component swaps. Pinned contract:
+
+- **Data protocol.** A request carrying the header `X-Topcoat-Svelte: data`
+  to a route whose handler renders a `page()` gets, instead of the HTML
+  document, a JSON response (`Content-Type: application/json`,
+  `Vary: X-Topcoat-Svelte`):
+  `{"module": "/_topcoat-svelte/c/<Name>-<hash>.js", "props": <the props value>}`.
+  The `Page` node itself answers this by inspecting the request `Cx` at render
+  time — the `#[page]` fn stays byte-identical for both kinds of request (it IS
+  the load()). Headers/content-type are set through topcoat's response-shaping
+  view parts; if node-position response shaping turns out impossible in
+  topcoat 0.4, that is a design-stopping deviation to report back, not to
+  work around silently.
+- **Client router.** Ships inside the vendored loader. Behavior:
+  - Intercept clicks on same-origin `<a>` without modifier keys, `target`,
+    `download`, or `data-tcs-reload` (the opt-out), and not pure-hash links.
+  - Fetch the target URL with `X-Topcoat-Svelte: data`; expect JSON. Anything
+    else (redirect to another content type, network error, non-page route) →
+    fall back to a full navigation (`location.assign`). Progressive
+    enhancement: without JS, links are just links.
+  - On success: dynamic-import the module, unmount the current page component,
+    mount the new one into the SAME page hydration root with the new props
+    (client render — hydration is only for the initial document), then
+    `history.pushState`, scroll to top (or to `#hash` target), and let
+    `<svelte:head>` apply on mount (title etc.).
+  - `popstate` re-runs the same data fetch for the restored URL.
+  - Only active when the document contains a page hydration root; island-only
+    documents get no interception.
+- **State semantics (v1, documented).** The whole page component tree is
+  swapped; Svelte-side layout component state does NOT survive navigation
+  (SvelteKit preserves layout instances; we don't yet). Islands outside the
+  page root are untouched.
+- **Prefetch (v1).** On `pointerover`/`focus` of an interceptable link,
+  fire the data fetch and module import ahead of the click, cached per URL for
+  the session's navigation lifetime. Failures during prefetch are silent (the
+  click path retries or falls back).
+- **Testing.** Rust: a page route returns the JSON contract under the header
+  and the HTML document without it (both feature modes). Browser E2E: click
+  navigation between two Svelte pages without a full reload (assert via an
+  in-page marker surviving navigation), correct URL/title, back/forward works,
+  fallback on a non-page link.
+
 ## Open questions deliberately deferred to Phase 2
 
 - SSR + hydration (JS engine embedding: Boa vs rquickjs) — see topcoat repo discussion.
