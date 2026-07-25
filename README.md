@@ -4,7 +4,17 @@ Use Svelte 5 components inside [Topcoat](https://crates.io/crates/topcoat) apps 
 compiled by [rsvelte](https://github.com/baseballyama/rsvelte), so the app
 developer needs only the Rust toolchain (no Node.js).
 
-**Status: experimental (Phase 1 — client-rendered islands, no SSR yet).**
+**Status: experimental.** Working today:
+
+- **Islands** — embed a Svelte component in a Topcoat `view!` page
+  (`component.island(cx, &props)`).
+- **Pages** — render a whole HTML document from one Svelte component tree, with
+  the `#[page]` function as SvelteKit's `load()` (`component.page(cx, &props)`).
+- **Module graph** — a component may `import` other `.svelte` files by relative
+  path; the whole reachable graph is compiled and served.
+- **SSR + hydration** — opt in with the `ssr` feature to server-render islands
+  and pages and hydrate them in the browser; off by default (a client-only build
+  needs no C compiler).
 
 ```rust
 use topcoat::{Result, context::Cx, router::page, view::view};
@@ -30,8 +40,10 @@ Register the asset route with `.route(topcoat_svelte::serve)` when building your
 router.
 
 See [`crates/topcoat-svelte/docs/islands.md`](crates/topcoat-svelte/docs/islands.md)
-for the full guide, [`DESIGN.md`](DESIGN.md) for the architecture and roadmap, and
-[`examples/counter`](examples/counter) for a runnable app.
+and [`crates/topcoat-svelte/docs/pages.md`](crates/topcoat-svelte/docs/pages.md)
+for the full guides, [`DESIGN.md`](DESIGN.md) for the architecture and roadmap,
+and [`examples/counter`](examples/counter) for a runnable app (islands at `/`, a
+full Svelte page at `/page`).
 
 ## Building
 

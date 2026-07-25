@@ -20,24 +20,49 @@ use std::cell::OnceCell;
 
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 use rquickjs::module::Declared;
-use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Promise, Runtime};
+use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, Runtime};
 
 use crate::{registry, runtime};
 
-/// Server-renders a component to its island HTML.
-trait SsrEngine {
-    /// Renders the component served at `module_key` with `props_json` (the exact
-    /// JSON string embedded in the island's props script) and returns its body
-    /// HTML, including Svelte's hydration boundary markers.
-    fn render(&self, module_key: &str, props_json: &str) -> Result<String, String>;
+/// A Svelte server render: the `<svelte:head>` content and the body HTML.
+///
+/// `head` carries whatever the component placed in `<svelte:head>` (empty when
+/// it declares none); `body` is the component markup, including Svelte's
+/// hydration boundary markers. Islands use only `body`; a full page also lifts
+/// `head` into the document head.
+pub(crate) struct SsrOutput {
+    pub(crate) head: String,
+    pub(crate) body: String,
 }
 
-/// Renders an island's server HTML on the current thread's engine.
+/// Server-renders a component through the embedded engine.
+trait SsrEngine {
+    /// Renders the component served at `module_key` with `props_json` (the exact
+    /// JSON string embedded in the island's props script) into its
+    /// [`SsrOutput`].
+    fn render(&self, module_key: &str, props_json: &str) -> Result<SsrOutput, String>;
+}
+
+/// Renders an island's server body HTML on the current thread's engine.
 ///
 /// `module_key` is the component's served URL and `props_json` is the exact JSON
 /// string that will also seed hydration on the client. Returns the body HTML, or
-/// an error describing why the render (or engine setup) failed.
+/// an error describing why the render (or engine setup) failed. The component's
+/// `<svelte:head>` output is discarded here; islands live inside an existing
+/// document, so only [`render_page`] lifts head content out.
 pub(crate) fn render_island(module_key: &str, props_json: &str) -> Result<String, String> {
+    render(module_key, props_json).map(|output| output.body)
+}
+
+/// Renders a page's server HTML on the current thread's engine, keeping both the
+/// `<svelte:head>` content and the body so a full document can place each where
+/// it belongs.
+pub(crate) fn render_page(module_key: &str, props_json: &str) -> Result<SsrOutput, String> {
+    render(module_key, props_json)
+}
+
+/// Drives the current thread's engine to render `module_key` with `props_json`.
+fn render(module_key: &str, props_json: &str) -> Result<SsrOutput, String> {
     ENGINE.with(|cell| match cell.get_or_init(RquickjsEngine::new) {
         Ok(engine) => engine.render(module_key, props_json),
         Err(err) => Err(format!("SSR engine failed to initialize: {err}")),
@@ -53,7 +78,9 @@ thread_local! {
 /// The render harness, evaluated once per engine. It imports `render` from the
 /// vendored `svelte/server` and exposes `renderKey`, which dynamically imports a
 /// component by its module key (cached after first use), parses the props from
-/// the exact embedded JSON string, and returns the rendered body.
+/// the exact embedded JSON string, and returns Svelte's render result. Its
+/// `head` carries `<svelte:head>` content; its `body` carries the component
+/// markup with Svelte's hydration boundary markers.
 const HARNESS: &str = r#"
 import { render } from 'svelte/server';
 const cache = new Map();
@@ -64,7 +91,7 @@ export async function renderKey(key, propsJson) {
         component = module.default;
         cache.set(key, component);
     }
-    return render(component, { props: JSON.parse(propsJson) }).body;
+    return render(component, { props: JSON.parse(propsJson) });
 }
 "#;
 
@@ -117,8 +144,8 @@ impl RquickjsEngine {
 }
 
 impl SsrEngine for RquickjsEngine {
-    fn render(&self, module_key: &str, props_json: &str) -> Result<String, String> {
-        self.context.with(|ctx| -> Result<String, String> {
+    fn render(&self, module_key: &str, props_json: &str) -> Result<SsrOutput, String> {
+        self.context.with(|ctx| -> Result<SsrOutput, String> {
             let render_fn: Function = ctx
                 .globals()
                 .get(RENDER_FN)
@@ -127,10 +154,15 @@ impl SsrEngine for RquickjsEngine {
                 .call((module_key, props_json))
                 .catch(&ctx)
                 .map_err(|err| err.to_string())?;
-            promise
-                .finish::<String>()
+            // The harness resolves to Svelte's render result object; read its
+            // `head` and `body` string fields.
+            let result: Object = promise
+                .finish::<Object>()
                 .catch(&ctx)
-                .map_err(|err| err.to_string())
+                .map_err(|err| err.to_string())?;
+            let head: String = result.get("head").map_err(|err| err.to_string())?;
+            let body: String = result.get("body").map_err(|err| err.to_string())?;
+            Ok(SsrOutput { head, body })
         })
     }
 }
@@ -181,12 +213,25 @@ fn engine_source(name: &str) -> Option<&'static str> {
     match name {
         "svelte/server" => runtime::runtime_file("runtime/server/server.js"),
         "svelte/internal/server" => runtime::runtime_file("runtime/server/internal-server.js"),
-        key if key.starts_with(&component_key_prefix()) => registry::server_source(key),
+        key if key.starts_with(COMPONENT_KEY_PREFIX) => registry::server_source(key),
         chunk => runtime::runtime_file(&format!("runtime/server/{chunk}")),
     }
 }
 
 /// The prefix every component module key starts with (`/_topcoat-svelte/c/`).
-fn component_key_prefix() -> String {
-    format!("{}/c/", crate::NAMESPACE)
+/// Kept as a compile-time constant so matching a key allocates nothing per
+/// render; a unit test pins it against [`crate::NAMESPACE`].
+const COMPONENT_KEY_PREFIX: &str = concat!("/_topcoat-svelte", "/c/");
+
+#[cfg(test)]
+mod tests {
+    use super::COMPONENT_KEY_PREFIX;
+
+    /// `COMPONENT_KEY_PREFIX` is spelled out as a literal (a `const` cannot call
+    /// `format!`), so this pins it to the runtime-built prefix to catch any drift
+    /// from [`crate::NAMESPACE`].
+    #[test]
+    fn component_key_prefix_matches_namespace() {
+        assert_eq!(COMPONENT_KEY_PREFIX, format!("{}/c/", crate::NAMESPACE));
+    }
 }

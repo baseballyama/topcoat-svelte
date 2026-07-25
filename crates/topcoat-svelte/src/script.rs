@@ -46,11 +46,14 @@ impl NodeViewParts for SvelteScript {
     fn into_view_parts(self, _cx: &Cx, parts: &mut PartsWriter<'_>) {
         // Built from fixed specifiers, the namespace, and the content hash, so
         // there is nothing to escape.
-        parts.push_str_unescaped(render());
+        parts.push_str_unescaped(markup());
     }
 }
 
-fn render() -> String {
+/// The import map + loader `<script>` markup. Shared with
+/// [`SvelteComponent::page`](crate::SvelteComponent::page), which places it in
+/// the document head it builds.
+pub(crate) fn markup() -> String {
     let imports: serde_json::Map<String, serde_json::Value> = IMPORT_MAP
         .iter()
         .map(|(specifier, file)| {
@@ -75,7 +78,7 @@ mod tests {
 
     #[test]
     fn emits_import_map_before_loader() {
-        let html = render();
+        let html = markup();
         let map_at = html.find("type=\"importmap\"").unwrap();
         let loader_at = html.find("loader.js").unwrap();
         assert!(map_at < loader_at);
@@ -87,7 +90,7 @@ mod tests {
 
     #[test]
     fn import_map_is_valid_json_with_all_specifiers() {
-        let html = render();
+        let html = markup();
         let start = html.find("type=\"importmap\">").unwrap() + "type=\"importmap\">".len();
         let end = html[start..].find("</script>").unwrap() + start;
         let parsed: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();

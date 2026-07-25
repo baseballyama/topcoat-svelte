@@ -1,5 +1,7 @@
-//! A minimal Topcoat app that mounts a Svelte 5 counter as a client-side island
-//! with initial props from Rust.
+//! A minimal Topcoat app showing two ways to use Svelte 5 from Rust: a counter
+//! embedded as a client-side island inside a `view!` page (`/`), and a whole
+//! document rendered from a single Svelte component tree (`/page`). Both seed
+//! their props from Rust.
 
 use topcoat::{
     Result,
@@ -10,6 +12,7 @@ use topcoat::{
 use topcoat_svelte::{SvelteComponent, svelte};
 
 static COUNTER: SvelteComponent = svelte!("./Counter.svelte");
+static PAGE: SvelteComponent = svelte!("./Page.svelte");
 
 async fn render_index(cx: &Cx) -> Result {
     view! { cx =>
@@ -33,6 +36,18 @@ async fn render_index(cx: &Cx) -> Result {
 #[page("/")]
 async fn index(cx: &Cx) -> Result {
     render_index(cx).await
+}
+
+/// Renders `/page` as a full Svelte document: `page` emits `<!doctype html>`
+/// with the runtime and the component's `<svelte:head>` in the head, and the
+/// component tree (here composing the reused `Counter` and `Label`) as the body.
+async fn render_page(cx: &Cx) -> Result {
+    view! { cx => (PAGE.page(cx, &serde_json::json!({ "count": 5 }))) }
+}
+
+#[page("/page")]
+async fn page_route(cx: &Cx) -> Result {
+    render_page(cx).await
 }
 
 /// Builds the router: the app's pages plus the `topcoat-svelte` asset route.
@@ -89,6 +104,47 @@ mod tests {
         {
             assert!(html.contains("data-tcs-ssr"));
             assert!(html.contains("clicked"), "server markup missing: {html}");
+        }
+    }
+
+    #[tokio::test]
+    async fn page_route_renders_full_document() {
+        let cx = CxTestBuilder::new().build();
+        let html = render_page(&cx).await.unwrap().render(&cx);
+
+        // A full HTML document with the runtime wired into the head and the
+        // hydration root as the body.
+        assert!(html.starts_with("<!doctype html><html><head>"), "{html}");
+        assert!(html.contains("type=\"importmap\""));
+        assert!(html.contains("/_topcoat-svelte/loader.js?v="));
+        assert!(html.contains("</head><body>"));
+        assert!(html.contains("data-tcs-module=\"/_topcoat-svelte/c/Page-"));
+        assert!(html.contains("<script type=\"application/json\">{\"count\":5}</script>"));
+
+        // The page composes the reused Counter and Label components.
+        let names: Vec<&str> = topcoat_svelte::compiled_modules()
+            .map(|m| m.name())
+            .collect();
+        assert!(names.contains(&"Page"));
+        assert!(names.contains(&"Counter"));
+        assert!(names.contains(&"Label"));
+
+        // With the `ssr` feature, the whole tree is server-rendered: the
+        // component's `<svelte:head>` title lands in the head and the body
+        // carries the rendered markup, marked for hydration.
+        #[cfg(feature = "ssr")]
+        {
+            let head_end = html.find("</head>").unwrap();
+            assert!(
+                html.find("<title>Rust + Svelte page</title>").unwrap() < head_end,
+                "svelte:head title must be in <head>: {html}"
+            );
+            assert!(html.contains("data-tcs-ssr"));
+            assert!(
+                html.contains("Full Svelte page"),
+                "server markup missing: {html}"
+            );
+            assert!(html.contains("clicked"), "nested counter missing: {html}");
         }
     }
 }

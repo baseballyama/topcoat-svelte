@@ -46,6 +46,10 @@ fn handle<'cx>(cx: &'cx Cx, _body: Body) -> RouteFuture<'cx> {
 
         let js = match file.strip_prefix("c/") {
             Some(module) => registry::lookup(module),
+            // The server runtime (`runtime/server/*`) is embedded only for the
+            // `ssr` engine to load in-process; it is never a browser asset, so it
+            // stays off the public route even though `build.rs` bundles it.
+            None if is_server_runtime(file) => None,
             None => runtime::runtime_file(file),
         };
 
@@ -61,4 +65,25 @@ fn handle<'cx>(cx: &'cx Cx, _body: Body) -> RouteFuture<'cx> {
             None => (StatusCode::NOT_FOUND, "not found").into_response(cx),
         }
     })
+}
+
+/// Whether a requested file is part of the SSR-only server runtime, which must
+/// not be served over the public route.
+fn is_server_runtime(file: &str) -> bool {
+    file.starts_with("runtime/server/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_server_runtime;
+
+    #[test]
+    fn server_runtime_files_are_not_public() {
+        assert!(is_server_runtime("runtime/server/server.js"));
+        assert!(is_server_runtime("runtime/server/internal-server.js"));
+        // Client runtime and compiled modules stay publicly served.
+        assert!(!is_server_runtime("runtime/svelte.js"));
+        assert!(!is_server_runtime("runtime/client.js"));
+        assert!(!is_server_runtime("loader.js"));
+    }
 }

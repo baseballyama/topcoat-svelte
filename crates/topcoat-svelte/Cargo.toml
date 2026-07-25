@@ -25,3 +25,5 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+# Building request `Parts` to drive the `serve` route in tests.
+http = { workspace = true }

@@ -14,6 +14,8 @@
 //! - [`svelte!`] compiles a `.svelte` file and yields a [`SvelteComponent`].
 //! - [`SvelteComponent::island`] renders the component as an island node inside
 //!   [`view!`](topcoat::view::view), seeded with props from Rust.
+//! - [`SvelteComponent::page`] renders a **whole HTML document** from one Svelte
+//!   component tree, with the `#[page]` function as SvelteKit's `load()`.
 //! - [`script`] emits the import map and island loader (place it in `<head>`),
 //!   and the [`serve`] route serves the runtime and compiled modules.
 //!
@@ -41,7 +43,9 @@
 //! By default islands are client-rendered: they render empty on the server and
 //! mount in the browser. Enabling the `ssr` feature server-renders each island's
 //! HTML (through an embedded JavaScript engine) and hydrates it on the client.
-//! See the crate's `docs/islands.md` guide and `DESIGN.md` for details.
+//! [`SvelteComponent::page`] renders a whole document the same way and works in
+//! both modes. See the crate's `docs/islands.md` and `docs/pages.md` guides and
+//! `DESIGN.md` for details.
 
 #![forbid(unsafe_code)]
 

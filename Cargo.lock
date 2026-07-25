@@ -3356,6 +3356,7 @@ dependencies = [
 name = "topcoat-svelte"
 version = "0.1.0"
 dependencies = [
+ "http",
  "inventory",
  "rquickjs",
  "serde",

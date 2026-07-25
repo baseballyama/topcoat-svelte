@@ -282,3 +282,79 @@ bundle. `loader.js` also changed (the `hydrate` branch).
 `topcoat-svelte/ssr`, so the plain `cargo build --workspace` needs no C compiler;
 `cargo run -p counter-example --features ssr` demonstrates SSR. The example's
 page test asserts the SSR markers only under `#[cfg(feature = "ssr")]`.
+
+## Stage 3: Svelte pages (the `page()` API)
+
+Implements the `DESIGN.md` "Stage 3: Svelte pages" contract: `SvelteComponent::page`
+renders a full `<!doctype html>` document from one component tree, with the
+`#[page]` Rust fn as SvelteKit's `load()`. Works with and without `ssr`.
+
+### Head-hook API shape (choice to report)
+
+The contract left the Rust extra-head hook to the implementer (builder or a
+second method). Chosen: a **consuming builder method on the returned value**,
+`Page::with_head(self, head: topcoat::view::View) -> Self`. `page()` returns a
+`Page` that is directly usable as a `NodeViewParts` node; `.with_head(...)`
+chains optional Rust head content:
+
+```rust,ignore
+view! { cx => (PAGE.page(cx, &props).with_head(view! { cx =>
+    <meta name="description" content=(description)>
+}?)) }
+```
+
+Rationale: `page()` already returns a node value, so a chained builder reads
+naturally in `view!` node position and keeps the no-extra-head case a bare
+`PAGE.page(cx, &props)`. The head is a `View` (not `impl NodeViewParts`) because
+`Page` must store it in a field until render; `View` is the concrete, public,
+object-safe-to-store type that already implements `NodeViewParts`, so the extra
+head still flows through the normal (escaping) view path. It renders lazily in
+`Page::into_view_parts`, where the `cx` is available, and is spliced into
+`<head>` after `script()`'s output and the component's `<svelte:head>`. The
+caller unwraps the `view!` macro's `Result` with `?` (natural inside a
+`-> Result` `#[page]` fn).
+
+### `SsrEngine::render` now returns `{ head, body }`
+
+The engine trait's output changed from `String` (body) to a small
+`SsrOutput { head, body }` struct, per the contract's head-extraction requirement.
+The render harness returns Svelte's `render()` result object directly; the Rust
+side reads its `head` and `body` string fields via `rquickjs::Object::get`
+(rquickjs implements no `FromJs` for tuples, so a `[head, body]` array decoded to
+`(String, String)` does not compile -- reading the object's named fields is both
+what works and what stays closest to Svelte's shape). `render_island` keeps
+returning body-only (islands live in an existing document); `render_page` returns
+both. `component_key_prefix()`'s per-call `String` allocation became the
+compile-time `const COMPONENT_KEY_PREFIX`, pinned to `NAMESPACE` by a unit test
+(Stage 2 review nit b).
+
+### Hydration root shared; loader unchanged (contract held, zero deviation)
+
+`island()` and `page()` both build the body's hydration root through one
+`hydration_root(module_url, ssr_attr, server_html, props_json)` helper -- the
+same `data-tcs-island` + `data-tcs-ssr` + embedded-props div, `display:contents`
+so it spans the body without a layout box. Because a page's root is byte-for-byte
+island-shaped, **the client loader needed zero changes**: its existing
+`data-tcs-ssr ? hydrate : mount` branch hydrates a page as-is. This was the
+contract's explicit success criterion, and it held.
+
+### Server runtime excluded from the public route (Stage 2 review nit a)
+
+`serve` now 404s any `runtime/server/*` path (`is_server_runtime`): the vendored
+server runtime is embedded (build.rs bundles all of `runtime/dist`) only for the
+`ssr` engine to load in-process, and must never be a browser asset. Client
+runtime files and compiled modules stay served. Covered by a `serve.rs` unit test
+on the predicate and a route-level `tests/serve.rs` that drives the actual
+`serve` handler: `GET /_topcoat-svelte/runtime/server/server.js` -> 404 while
+`loader.js`/`runtime/svelte.js` -> 200, and (under `ssr`) SSR still renders while
+that path is 404. Driving the route needs a hand-built `http::request::Parts`, so
+`http` was added as a **dev-dependency** of `topcoat-svelte` (test-only).
+
+### Deviations from the Stage 3 contract
+
+None material. The document is emitted as `<!doctype html><html><head>…` with no
+`lang`/`<meta charset>` baked in -- those belong to the app (via `with_head` or
+the component's `<svelte:head>`), keeping `page()` unopinionated. `page()` takes
+`cx` for symmetry with `island()` but does not use it at construction (props
+serialize eagerly, SSR runs on the current thread's engine); it is retained for
+API stability, matching the island precedent.

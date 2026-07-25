@@ -35,6 +35,7 @@ sha2 = "0.10"
 # default (CSR-only) build does not.
 rquickjs = "0.12"
 tokio = "1"
+http = "1"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"

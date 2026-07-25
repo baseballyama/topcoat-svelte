@@ -9,6 +9,11 @@ By default, islands render empty on the server and mount on the client. Enable
 the [`ssr` feature](#server-side-rendering-the-ssr-feature) to server-render each
 island's HTML and hydrate it in the browser.
 
+An island is a Svelte component *inside* a Topcoat page. If you instead want the
+**whole document** to be one Svelte component tree (with the `#[page]` function
+playing SvelteKit's `load()`), see the [Svelte pages guide](pages.md) and
+`SvelteComponent::page`.
+
 ## The three pieces
 
 Using a Svelte component takes three things:
