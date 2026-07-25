@@ -5,8 +5,9 @@ Topcoat page as a client-rendered **island**. The component is compiled to
 JavaScript at Rust build time by [rsvelte](https://github.com/baseballyama/rsvelte),
 so your app needs only the Rust toolchain -- no Node.js, no npm, no bundler.
 
-This is Phase 1: islands render empty on the server and mount on the client.
-There is no SSR or hydration yet.
+By default, islands render empty on the server and mount on the client. Enable
+the [`ssr` feature](#server-side-rendering-the-ssr-feature) to server-render each
+island's HTML and hydrate it in the browser.
 
 ## The three pieces
 
@@ -170,3 +171,37 @@ names the module's content-hashed URL, and `script()` adds the import map and
 loader. In the browser, the loader imports each island's module and mounts it,
 resolving every `svelte*` import through the import map to the vendored runtime
 that `serve` provides.
+
+## Server-side rendering (the `ssr` feature)
+
+By default islands are client-rendered. Enable the `ssr` feature to
+server-render each island's HTML and hydrate it in the browser, so the content
+is present in the initial response:
+
+```toml
+[dependencies]
+topcoat-svelte = { version = "0.1", features = ["ssr"] }
+```
+
+Nothing else in your code changes: the same `island(cx, &props)` call now emits
+the component's server-rendered markup inside the island (marked `data-tcs-ssr`),
+and the loader hydrates it instead of mounting from scratch. The props embedded
+for the client are the exact same JSON used for the server render, so the two
+sides always agree.
+
+How it works: `svelte!` compiles every component to server JavaScript as well as
+client JavaScript. When the feature is on, `island` runs that server code in an
+embedded QuickJS engine (one per thread, reused across renders) to produce the
+HTML. A component's imports resolve in the engine exactly as they do in the
+browser, so a whole module graph server-renders correctly.
+
+Notes and limits:
+
+- **Build cost.** The feature pulls in `rquickjs`, which builds QuickJS from C,
+  so an `ssr` build needs a C compiler. A default (client-only) build does not.
+- **Graceful fallback.** If a server render fails, that island silently falls
+  back to client rendering (an empty island the browser mounts) rather than
+  failing the response.
+- **Unstyled flash.** Component CSS is still injected by JavaScript at hydration
+  time, so server-rendered markup can appear briefly unstyled until the island
+  hydrates. Serving extracted CSS is a future improvement.

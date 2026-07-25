@@ -6,12 +6,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Server-side render islands and hydrate them on the client. Off by default:
+# enabling it pulls in rquickjs (QuickJS built from C) to execute rsvelte's
+# server output. Without it, islands are client-rendered exactly as before.
+ssr = ["dep:rquickjs"]
+
 [dependencies]
 topcoat-svelte-macro = { workspace = true }
 topcoat = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 inventory = { workspace = true }
+rquickjs = { workspace = true, features = ["loader"], optional = true }
 
 [build-dependencies]
 sha2 = { workspace = true }

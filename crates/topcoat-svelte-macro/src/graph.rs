@@ -1,16 +1,17 @@
 //! Compiling an entry component together with its transitive `.svelte` imports.
 //!
-//! Starting from the entry file, each component is compiled with rsvelte, its
-//! relative `.svelte` import specifiers are resolved and compiled recursively,
-//! and those specifiers are rewritten in the emitted JS to the served URL of the
-//! child module. A child is compiled before the parent that imports it, so the
-//! parent's content hash -- computed *after* rewriting -- folds in the child's
-//! hash and changes whenever any transitive dependency changes.
+//! Starting from the entry file, each component is compiled with rsvelte to both
+//! client and server JavaScript, its relative `.svelte` import specifiers are
+//! resolved and compiled recursively, and those specifiers are rewritten in both
+//! emitted texts to the served URL of the child module. A child is compiled
+//! before the parent that imports it, so the parent's content hash -- computed
+//! *after* rewriting the client text -- folds in the child's hash and changes
+//! whenever any transitive dependency changes.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rsvelte_core::compiler::{CompileOptions, CssMode, GenerateMode, compile};
+use rsvelte_core::compiler::{CompileOptions, CssMode, compile_both};
 
 use crate::resolve::{component_name, resolve_import, short_hash};
 use crate::rewrite::{SvelteImport, rewrite_specifiers, svelte_imports};
@@ -25,11 +26,16 @@ const MODULE_URL_PREFIX: &str = "/_topcoat-svelte/c/";
 pub(crate) struct Module {
     /// The PascalCase component name (its file stem).
     pub(crate) name: String,
-    /// The content hash of the (rewritten) compiled JavaScript.
+    /// The content hash of the (rewritten) compiled client JavaScript. The URL
+    /// is derived from the client hash so it is unchanged from client-only
+    /// builds; the server text rides along under the same key.
     pub(crate) hash: String,
-    /// The compiled JavaScript, with child `.svelte` specifiers rewritten to
-    /// served URLs.
+    /// The compiled client JavaScript, with child `.svelte` specifiers rewritten
+    /// to served URLs.
     pub(crate) js: String,
+    /// The compiled server JavaScript (for the `ssr` feature), with the same
+    /// child specifiers rewritten to the same served URLs.
+    pub(crate) server_js: String,
     /// The absolute path of the source file, for `include_str!`.
     pub(crate) abs_path: String,
 }
@@ -103,54 +109,69 @@ impl Builder {
         let source = std::fs::read_to_string(&path)
             .map_err(|err| format!("could not read {}: {err}", path.display()))?;
 
+        // One shared parse/analyze produces both the client and server output.
+        // The server text is only used by the `ssr` feature, but compiling it
+        // here keeps the two outputs derived from the same analysis.
         let options = CompileOptions {
-            generate: GenerateMode::Client,
             css: CssMode::Injected,
             name: Some(name.clone()),
             filename: Some(abs_path.clone()),
             ..Default::default()
         };
-        let compiled = compile(&source, options)
+        let (client, server) = compile_both(&source, options)
             .map_err(|err| format!("failed to compile {}: {err}", path.display()))?;
-        let js = compiled.js.code;
+        let client_js = client.js.code;
+        let server_js = server.js.code;
 
-        let replacements = self.resolve_children(&path, svelte_imports(&js)?)?;
-        let rewritten = rewrite_specifiers(&js, &replacements);
-        let hash = short_hash(&rewritten);
+        // Resolve every child from the client imports, recording each
+        // specifier's served URL, then apply those URLs to the client text.
+        let mut url_by_specifier: HashMap<String, String> = HashMap::new();
+        let mut client_replacements = Vec::new();
+        for import in svelte_imports(&client_js)? {
+            let url = self.resolve_child_url(&path, &import.specifier)?;
+            url_by_specifier.insert(import.specifier.clone(), url.clone());
+            client_replacements.push((import, url));
+        }
+        let client_rewritten = rewrite_specifiers(&client_js, &client_replacements);
+
+        // The server text imports the same children; rewrite its own spans to
+        // the same URLs so the module graph resolves identically in the engine.
+        let server_replacements: Vec<(SvelteImport, String)> = svelte_imports(&server_js)?
+            .into_iter()
+            .filter_map(|import| {
+                url_by_specifier
+                    .get(&import.specifier)
+                    .map(|url| (import, url.clone()))
+            })
+            .collect();
+        let server_rewritten = rewrite_specifiers(&server_js, &server_replacements);
+
+        let hash = short_hash(&client_rewritten);
 
         self.stack.pop();
         let index = self.modules.len();
         self.modules.push(Module {
             name,
             hash,
-            js: rewritten,
+            js: client_rewritten,
+            server_js: server_rewritten,
             abs_path,
         });
         self.compiled.insert(path, index);
         Ok(index)
     }
 
-    /// Resolves and compiles each imported child, pairing every import with the
-    /// URL its compiled module is served from.
-    fn resolve_children(
+    /// Resolves and compiles the child named by `specifier` (relative to
+    /// `importer`), returning the URL its compiled module is served from.
+    fn resolve_child_url(
         &mut self,
         importer: &std::path::Path,
-        imports: Vec<SvelteImport>,
-    ) -> Result<Vec<(SvelteImport, String)>, String> {
-        let mut replacements = Vec::with_capacity(imports.len());
-        for import in imports {
-            let child = resolve_import(importer, &import.specifier).map_err(|err| {
-                format!(
-                    "{} (imported by {}): {err}",
-                    import.specifier,
-                    importer.display()
-                )
-            })?;
-            let child_index = self.compile(child)?;
-            let url = self.modules[child_index].module_url();
-            replacements.push((import, url));
-        }
-        Ok(replacements)
+        specifier: &str,
+    ) -> Result<String, String> {
+        let child = resolve_import(importer, specifier)
+            .map_err(|err| format!("{specifier} (imported by {}): {err}", importer.display()))?;
+        let child_index = self.compile(child)?;
+        Ok(self.modules[child_index].module_url())
     }
 }
 

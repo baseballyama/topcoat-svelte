@@ -59,11 +59,12 @@ fn expand(arg: &LitStr) -> Result<proc_macro2::TokenStream, String> {
         let name = &module.name;
         let hash = &module.hash;
         let js = &module.js;
+        let server_js = &module.server_js;
         let abs = &module.abs_path;
         quote! {
             const _: &str = ::core::include_str!(#abs);
             ::topcoat_svelte::__private::inventory::submit! {
-                ::topcoat_svelte::CompiledModule::new(#name, #hash, #js)
+                ::topcoat_svelte::CompiledModule::new(#name, #hash, #js, #server_js)
             }
         }
     });

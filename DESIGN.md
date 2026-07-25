@@ -234,6 +234,42 @@ not rewritten -- rsvelte never emits it for child components, but user-written
 code in a `<script>` block may contain one; it fails at run time with a clean
 404 (the specifier resolves outside the registry), never with silent corruption.
 
+## Phase 2: SSR + hydration (the `ssr` cargo feature)
+
+Spike evidence: `docs/phase2-ssr-spike.md`. Pinned contract:
+
+- **Feature.** `ssr` on `topcoat-svelte`, off by default. With it enabled,
+  `island()` renders the component's server HTML into the island div and the
+  client hydrates instead of mounting. Without it, behavior is exactly Phase 1.
+- **Macro.** `svelte!` always uses `rsvelte_core::compile_both` and embeds BOTH
+  client and server JS (one shared parse/analyze; the server text is dead weight
+  only when `ssr` is off — acceptable). Server JS gets the same specifier
+  rewriting as client JS; the rewritten URL doubles as the in-engine module key,
+  so the module graph resolves identically on both sides.
+- **Engine.** A minimal internal trait (e.g. `SsrEngine { render(module_key,
+  props_json) -> Result<String> }`) with the rquickjs implementation behind the
+  feature. One engine per thread (`thread_local!`), the server-runtime modules
+  registered in a custom rquickjs resolver/loader: bare `svelte/server` /
+  `svelte/internal/server` specifiers resolve to a NEW vendored server-runtime
+  ESM bundle (built by `runtime/build.mjs` like the client one, committed under
+  `runtime/dist/`), component keys resolve from the registry. Renders are
+  synchronous and ~0.02 ms warm; no per-request engine setup.
+- **Props identity.** The props JSON string embedded in the island's
+  `<script type="application/json">` is THE input: the same string is
+  `JSON.parse`d inside the engine for the server render and by the loader for
+  hydration, guaranteeing the identical-props precondition for hydration.
+- **Island HTML.** SSR islands additionally carry `data-tcs-ssr` and contain
+  the server-rendered HTML (with Svelte's `<!--[-->`/`<!--]-->` markers) before
+  the props script element. The loader branches: `data-tcs-ssr` → `hydrate()`,
+  else `mount()`. The vendored `runtime/svelte.js` entry re-exports `hydrate`
+  (no new importmap entries needed).
+- **Failure mode.** If the server render throws, `island()` logs via the
+  crate's established `eprintln!` convention and falls back to the Phase 1
+  empty-div CSR island — an SSR bug degrades to client rendering, never a 500.
+- **Known limit.** CSS stays `Injected` (applied at hydrate time), so SSR HTML
+  can flash unstyled until hydration; extracted-CSS serving remains the fix and
+  stays deferred.
+
 ## Open questions deliberately deferred to Phase 2
 
 - SSR + hydration (JS engine embedding: Boa vs rquickjs) — see topcoat repo discussion.

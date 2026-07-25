@@ -30,6 +30,10 @@ serde = "1"
 serde_json = "1"
 inventory = "0.3"
 sha2 = "0.10"
+# The `ssr` feature embeds QuickJS (via rquickjs) to run rsvelte's server output.
+# rquickjs-sys builds QuickJS from C, so an `ssr` build needs a C compiler; the
+# default (CSR-only) build does not.
+rquickjs = "0.12"
 tokio = "1"
 proc-macro2 = "1"
 quote = "1"

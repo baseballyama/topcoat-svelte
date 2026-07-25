@@ -1,9 +1,10 @@
 // Island loader. Served at /_topcoat-svelte/loader.js and injected by
 // `topcoat_svelte::script()`. On load it finds every island marker, reads its
-// module URL and props, dynamically imports the compiled component, and mounts
-// it. `mount` and every `svelte*` specifier resolve through the import map that
-// `script()` emits before this module.
-import { mount } from "svelte";
+// module URL and props, dynamically imports the compiled component, and either
+// mounts it (client-only island) or hydrates it (SSR island, marked with
+// `data-tcs-ssr`). `mount`/`hydrate` and every `svelte*` specifier resolve
+// through the import map that `script()` emits before this module.
+import { mount, hydrate } from "svelte";
 
 function mountIsland(el) {
   if (el.hasAttribute("data-tcs-mounted")) return;
@@ -22,9 +23,12 @@ function mountIsland(el) {
     }
   }
 
+  // An SSR island already contains server-rendered markup; hydrate it in place
+  // so the existing DOM is reused. A client-only island mounts from scratch.
+  const create = el.hasAttribute("data-tcs-ssr") ? hydrate : mount;
   import(moduleUrl)
     .then((mod) => {
-      mount(mod.default, { target: el, props });
+      create(mod.default, { target: el, props });
     })
     .catch((err) => {
       console.error("[topcoat-svelte] could not mount island", moduleUrl, err);

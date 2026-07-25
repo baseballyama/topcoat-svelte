@@ -82,5 +82,13 @@ mod tests {
             .unwrap();
         assert!(counter.js().contains("/_topcoat-svelte/c/Label-"));
         assert!(!counter.js().contains("'./Label.svelte'"));
+
+        // With the `ssr` feature, the counter (and its Label child) are
+        // server-rendered into the island for the client to hydrate.
+        #[cfg(feature = "ssr")]
+        {
+            assert!(html.contains("data-tcs-ssr"));
+            assert!(html.contains("clicked"), "server markup missing: {html}");
+        }
     }
 }

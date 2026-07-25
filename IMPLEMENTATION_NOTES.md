@@ -193,3 +193,92 @@ The `svelte!` macro grew from one `lib.rs` into `lib.rs` (the proc-macro entry
 and token generation), `resolve.rs` (path resolution, naming, hashing),
 `rewrite.rs` (the oxc-based specifier extraction/rewriting), and `graph.rs` (the
 recursive graph builder), following the repo's file-per-module style.
+
+## Stage 2: SSR + hydration (the `ssr` feature)
+
+Implements the `DESIGN.md` "Phase 2: SSR + hydration" contract on `rquickjs`,
+per the `docs/phase2-ssr-spike.md` verdict. Off by default; enabling it
+server-renders islands and hydrates them.
+
+### Macro: always compile both outputs
+
+`svelte!` now calls `rsvelte_core::compile_both` (one shared parse/analyze) and
+embeds both the client and server JavaScript in each `CompiledModule`. The
+server text gets the *same* specifier rewriting as the client text, but computed
+independently: a child's served URL is resolved once (from the client imports)
+and then applied to the server text using that text's own oxc-located import
+spans (client and server emit the same `import` specifiers at different byte
+offsets). The module hash -- and therefore the served URL -- is still the hash
+of the *client* text only, so URLs are unchanged from a client-only build and
+the no-feature output stays byte-identical
+(`component::tests::island_html_is_byte_identical_without_ssr`). Server output
+always compiles even when `ssr` is off; that is dead weight in the binary, which
+the contract accepts in exchange for a single macro path.
+
+### Engine: `rquickjs` module loader (reviewer focus)
+
+`ssr.rs` (feature-gated) runs the server code in QuickJS. Two things are worth
+scrutiny:
+
+- **Module resolution.** A custom `Resolver`/`Loader` pair maps in-engine module
+  names to source:
+  - bare `svelte/server` and `svelte/internal/server` -> the vendored server
+    runtime bundle (`runtime/server/*.js`, embedded via `RUNTIME_FILES`);
+  - a component's key -- which is its served URL, byte-for-byte the specifier the
+    macro rewrote into both client and server JS -> that component's server JS
+    from the registry (`registry::server_source`);
+  - a relative specifier (only the server bundle's split chunks import these) ->
+    its file name, looked up under `runtime/server/`.
+  The resolver reduces relatives to their basename and passes bare/absolute names
+  through unchanged. This is the same idea as the client's import map, enforced
+  in Rust instead of the browser. Because the rewritten URL is the engine key,
+  the module graph resolves identically on both sides -- validated end to end
+  (`graph_island_ssrs_with_children_resolved`).
+- **Engine lifecycle.** One engine per thread via `thread_local!` holding an
+  `OnceCell<Result<RquickjsEngine, String>>`: setup (build runtime, set loader,
+  evaluate the render harness) runs once on first render on a thread and a setup
+  failure is remembered rather than retried. The harness (`HARNESS`) imports
+  `render` from `svelte/server`, dynamically `import()`s a component by key
+  (caching it in a JS `Map`), `JSON.parse`s the exact embedded props string, and
+  returns `render(...).body`. Renders drive the QuickJS job queue synchronously
+  with `Promise::finish`. The `Runtime` is kept in the engine struct only to
+  outlive the `Context`. QuickJS caches modules by resolved name, so a child
+  pulled in as a parent's dependency and later rendered as its own island is not
+  re-declared -- confirmed in the spike scratch.
+
+### Props identity
+
+The string embedded in the island's `<script type="application/json">` is the
+single source of truth: `island` passes that exact string to the engine (parsed
+by `JSON.parse` there) and the same string seeds hydration on the client, so the
+hydration precondition (identical props) holds by construction. The existing
+`escape::to_script_json` escaping (e.g. `<` -> `<`) is JSON-valid, so the
+engine parses it back to the same value -- verified in the spike scratch
+(`{"name":"a<b"}` renders `a&lt;b`).
+
+### Failure mode
+
+`island` calls `server_render`, which under `ssr` maps any engine error to the
+crate's `eprintln!` convention plus an empty `("", String::new())`, so the island
+degrades to a client-rendered placeholder. An SSR bug therefore never 500s a
+page (`ssr_error_falls_back_to_client_rendering`).
+
+### Vendored server runtime (deviation to report)
+
+`runtime/build.mjs` gained a server bundle (`svelte/server` +
+`svelte/internal/server`, esbuild-split, `platform: "neutral"`) under
+`runtime/dist/runtime/server/`. Regenerating `dist` also changed two *client*
+files that the brief hoped would stay stable: `runtime/svelte.js` (now also
+re-exports `hydrate`, which the loader needs) and, as a consequence,
+`runtime/client.js` and the shared client chunk (esbuild now pulls `hydrate` and
+its dependencies into the client runtime, and the content-hashed chunk name
+changed). `disclose-version.js`, `flags-legacy.js`, and the small disclose chunk
+stayed byte-identical. This is unavoidable: hydration must ship in the client
+bundle. `loader.js` also changed (the `hydrate` branch).
+
+### Example and feature wiring
+
+`counter-example` gains a non-default `ssr` feature forwarding to
+`topcoat-svelte/ssr`, so the plain `cargo build --workspace` needs no C compiler;
+`cargo run -p counter-example --features ssr` demonstrates SSR. The example's
+page test asserts the SSR markers only under `#[cfg(feature = "ssr")]`.

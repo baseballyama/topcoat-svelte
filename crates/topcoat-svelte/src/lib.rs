@@ -36,11 +36,12 @@
 //!
 //! Register [`serve`] on the router with `.route(topcoat_svelte::serve)`.
 //!
-//! # Phase 1 scope
+//! # Rendering modes
 //!
-//! Islands render empty on the server and mount on the client; there is no SSR
-//! or hydration yet. See the crate's `docs/islands.md` guide and `DESIGN.md` for
-//! the roadmap.
+//! By default islands are client-rendered: they render empty on the server and
+//! mount in the browser. Enabling the `ssr` feature server-renders each island's
+//! HTML (through an embedded JavaScript engine) and hydrates it on the client.
+//! See the crate's `docs/islands.md` guide and `DESIGN.md` for details.
 
 #![forbid(unsafe_code)]
 
@@ -50,6 +51,8 @@ mod registry;
 mod runtime;
 mod script;
 mod serve;
+#[cfg(feature = "ssr")]
+mod ssr;
 
 pub use component::*;
 pub use registry::*;

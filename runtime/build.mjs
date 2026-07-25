@@ -5,17 +5,21 @@
 // Usage: cd runtime && pnpm install && node build.mjs
 //
 // Layout produced (mirrors the served URL namespace):
-//   dist/loader.js                     -> /_topcoat-svelte/loader.js
-//   dist/runtime/svelte.js             -> /_topcoat-svelte/runtime/svelte.js
-//   dist/runtime/client.js             -> /_topcoat-svelte/runtime/client.js
-//   dist/runtime/disclose-version.js   -> /_topcoat-svelte/runtime/disclose-version.js
-//   dist/runtime/flags-legacy.js       -> /_topcoat-svelte/runtime/flags-legacy.js
-//   dist/runtime/chunk-*.js            -> shared code split out of the entries
+//   dist/loader.js                        -> /_topcoat-svelte/loader.js
+//   dist/runtime/svelte.js                -> /_topcoat-svelte/runtime/svelte.js
+//   dist/runtime/client.js                -> /_topcoat-svelte/runtime/client.js
+//   dist/runtime/disclose-version.js      -> /_topcoat-svelte/runtime/disclose-version.js
+//   dist/runtime/flags-legacy.js          -> /_topcoat-svelte/runtime/flags-legacy.js
+//   dist/runtime/chunk-*.js               -> shared code split out of the entries
+//   dist/runtime/server/server.js         -> the `svelte/server` render entry (SSR engine)
+//   dist/runtime/server/internal-server.js-> the `svelte/internal/server` entry (SSR engine)
+//   dist/runtime/server/chunk-*.js        -> shared server-runtime code
 //
-// Splitting is required: the entries share one copy of the Svelte client
-// runtime through a common chunk, so the runtime's module-level state is a
-// singleton across every entry (mount, the component namespace, and the
-// disclose-version side effect).
+// Splitting is required: the entries share one copy of the Svelte runtime
+// through a common chunk, so the runtime's module-level state is a singleton
+// across every entry (mount/hydrate, the component namespace, and the
+// disclose-version side effect). The server bundle is only consumed by the
+// `ssr` feature's embedded JS engine; the client bundle is served to browsers.
 
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
@@ -42,6 +46,30 @@ await build({
   format: "esm",
   platform: "browser",
   conditions: ["browser"],
+  minify: true,
+  entryNames: "[name]",
+  chunkNames: "chunk-[hash]",
+  legalComments: "none",
+  logLevel: "info",
+});
+
+// The Svelte server-runtime entries, for the `ssr` feature's embedded JS
+// engine (never served to a browser). `svelte/server` provides `render`;
+// `svelte/internal/server` is what server-compiled components import. Splitting
+// keeps the shared server runtime a singleton across the two, mirroring the
+// client bundle. The engine's module loader maps the bare `svelte/server` /
+// `svelte/internal/server` specifiers and the relative chunk imports here.
+await build({
+  entryPoints: {
+    server: join(here, "entry", "server", "server.js"),
+    "internal-server": join(here, "entry", "server", "internal-server.js"),
+  },
+  outdir: join(distDir, "runtime", "server"),
+  bundle: true,
+  splitting: true,
+  format: "esm",
+  platform: "neutral",
+  conditions: ["default"],
   minify: true,
   entryNames: "[name]",
   chunkNames: "chunk-[hash]",

@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# Server-render the counter island (and hydrate it on the client). Run the
+# example with `cargo run -p counter-example --features ssr`. Off by default so
+# the plain workspace build needs no C toolchain.
+ssr = ["topcoat-svelte/ssr"]
+
 [dependencies]
 topcoat = { workspace = true }
 topcoat-svelte = { workspace = true }
