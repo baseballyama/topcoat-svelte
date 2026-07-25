@@ -18,6 +18,13 @@ topcoat-svelte-macro = { path = "crates/topcoat-svelte-macro", version = "0.1.0"
 topcoat = "0.4"
 topcoat-view = "0.4"
 topcoat-router = "0.4"
+# rsvelte is not on crates.io yet, and a `git` dependency on the rsvelte repo
+# does not work today: cargo fetches git submodules of git dependencies
+# recursively, and rsvelte's test-fixture submodules are huge (typescript-go,
+# svelte.dev), partly SSH-only (vize, corsa-bind), and currently fail to
+# resolve at all (`submodules/vize` nests a `temp_web/element` submodule with
+# no URL configured). Until rsvelte_core is published, build with a sibling
+# checkout: `git clone https://github.com/baseballyama/rsvelte ../rsvelte`.
 rsvelte_core = { path = "../rsvelte/crates/rsvelte_core" }
 serde = "1"
 serde_json = "1"

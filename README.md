@@ -33,6 +33,20 @@ See [`crates/topcoat-svelte/docs/islands.md`](crates/topcoat-svelte/docs/islands
 for the full guide, [`DESIGN.md`](DESIGN.md) for the architecture and roadmap, and
 [`examples/counter`](examples/counter) for a runnable app.
 
+## Building
+
+[rsvelte](https://github.com/baseballyama/rsvelte) is not on crates.io yet, so
+this workspace expects a sibling checkout at `../rsvelte`:
+
+```sh
+git clone https://github.com/baseballyama/rsvelte ../rsvelte
+```
+
+(A `git` dependency is not usable today: cargo fetches git submodules of git
+dependencies recursively, and rsvelte's test-fixture submodules are huge,
+partly SSH-only, and currently fail to resolve. This becomes a normal
+crates.io dependency once rsvelte_core is published.)
+
 ## Development
 
 The `runtime/` directory contains the maintainer-only JS build that vendors the
