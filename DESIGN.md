@@ -348,6 +348,51 @@ Server-driven routing with client-side page-component swaps. Pinned contract:
   in-page marker surviving navigation), correct URL/title, back/forward works,
   fallback on a non-page link.
 
+## Dev live reload (the `dev` cargo feature) — HMR v1
+
+Editing a `.svelte` file while the app runs updates the browser with **no
+rustc and no Node in the loop**: the compiler is a Rust library inside the
+server process. v1 is whole-page live reload (component-state-preserving hot
+swap is a later refinement). Pinned contract:
+
+- **Feature.** `dev` on `topcoat-svelte`, off by default, never meant for
+  production (documented loudly). It adds `rsvelte_core` and a file watcher
+  (`notify`) as runtime dependencies of the app.
+- **Shared compile crate.** The macro's compile pipeline (graph walk, oxc
+  specifier rewriting, hashing, name derivation) moves into a new library
+  crate `topcoat-svelte-compile`, used by the proc-macro at build time and by
+  the dev reloader at run time. One implementation, two callers; the macro's
+  observable output stays byte-identical (existing tests prove it).
+- **Source tracking.** Every registered module records its absolute source
+  path (the macro already knows it). The dev watcher watches exactly those
+  paths.
+- **Overlay registry.** A `RwLock` overlay maps a module's ORIGINAL served
+  URL to its latest recompiled JS (client and server text). The serve route
+  consults the overlay first; URLs never change in dev (the overlay swaps
+  content under the stable URL), so no client-side remapping exists. With
+  `dev` enabled, module/runtime responses are served `Cache-Control:
+  no-cache` instead of immutable.
+- **Recompile scope.** On a changed file: recompile it and every ancestor
+  that (transitively) imports it — child URL embedding means ancestors'
+  text changes too. Specifier rewriting maps each child to its ORIGINAL
+  stable URL (from the registry), preserving the graph. Debounce bursts.
+- **SSR interplay.** The overlay updates server JS as well and bumps a
+  global generation counter; each thread-local engine lazily rebuilds its
+  context when it observes a stale generation, so the next server render
+  uses the fresh component.
+- **Client.** With `dev` on, `script()` additionally emits a small dev
+  script (vendored like the loader) that opens an `EventSource` on
+  `GET /_topcoat-svelte/dev/events` (SSE, served by the same `serve` route)
+  and calls `location.reload()` on a `change` event.
+- **Failure mode.** A failed recompile keeps the last good overlay entry,
+  logs the compiler diagnostic to the terminal (`eprintln!` convention), and
+  emits an `error` SSE event whose payload the dev script `console.error`s.
+  No reload is triggered until a compile succeeds.
+- **Activation.** One explicit call in the app (e.g.
+  `topcoat_svelte::dev::watch()` invoked from main when the feature is on)
+  starts the watcher; it is a no-op question for prod builds because the
+  feature gates the module entirely.
+
 ## Open questions deliberately deferred to Phase 2
 
 - SSR + hydration (JS engine embedding: Boa vs rquickjs) — see topcoat repo discussion.
