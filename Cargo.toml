@@ -15,7 +15,7 @@ repository = "https://github.com/baseballyama/topcoat-svelte"
 [workspace.dependencies]
 topcoat-svelte = { path = "crates/topcoat-svelte", version = "0.1.0" }
 topcoat-svelte-macro = { path = "crates/topcoat-svelte-macro", version = "0.1.0" }
-topcoat = "0.4"
+topcoat = "0.11"
 topcoat-view = "0.4"
 topcoat-router = "0.4"
 # rsvelte is not on crates.io yet, and a `git` dependency on the rsvelte repo
